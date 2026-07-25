@@ -1,4 +1,0 @@
-# Install devDependencies so `vite` is available during `npm run build`
-# (Railway often sets NODE_ENV=production, which would omit them).
-[phases.install]
-cmds = ["npm ci --include=dev"]
