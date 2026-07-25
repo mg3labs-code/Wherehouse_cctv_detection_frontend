@@ -12,7 +12,7 @@ export default defineConfig({
     proxy: {
       // One tunnel to :5173 is enough — /api proxies to FastAPI on :8001
       '/api': {
-        target: 'http://127.0.0.1:8001',
+        target: 'https://wherehousecctvdetection-production.up.railway.app/',
         changeOrigin: true,
         timeout: 0,
         proxyTimeout: 0,
