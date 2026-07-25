@@ -3,7 +3,7 @@
  *
  * Dev: Vite proxies `/api/*` JSON to :8001. MJPEG stream hits :8001 directly
  * (avoids Vite proxy buffering that freezes the live feed).
- * Prod: same origin when served from FastAPI on :8001.
+ * Prod: set VITE_API_ORIGIN to the FastAPI host (Railway backend).
  */
 
 export type Summary = {
@@ -64,10 +64,10 @@ export type LiveStatus = {
 }
 
 /**
- * Backend origin for MJPEG stream.
- * - Localhost: hit :8001 directly (avoids Vite buffering)
- * - ngrok / remote: same-origin `/api` via Vite proxy (127.0.0.1 is unreachable from outside)
- * - Override anytime with VITE_API_ORIGIN
+ * Backend origin for API + MJPEG.
+ * - VITE_API_ORIGIN wins (production Railway backend, etc.)
+ * - Localhost: hit :8001 directly (avoids Vite buffering for streams)
+ * - Otherwise relative `/api` (Vite proxy in dev, or same-origin)
  */
 export function resolveApiOrigin(): string {
   const env = (import.meta.env.VITE_API_ORIGIN as string | undefined)?.replace(/\/$/, '')
@@ -82,8 +82,12 @@ export function resolveApiOrigin(): string {
 export const API_ORIGIN: string = resolveApiOrigin()
 
 function apiPath(path: string): string {
-  // JSON calls stay relative so Vite proxy works and cookies aren't needed
-  return path.startsWith('/') ? path : `/${path}`
+  const p = path.startsWith('/') ? path : `/${path}`
+  const origin = resolveApiOrigin()
+  // Relative in local Vite so the proxy is used for JSON; absolute when VITE_API_ORIGIN is set
+  if (!origin) return p
+  if (import.meta.env.DEV && origin.includes('127.0.0.1')) return p
+  return `${origin}${p}`
 }
 
 async function get<T>(path: string): Promise<T> {
