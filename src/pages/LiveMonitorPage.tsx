@@ -9,8 +9,8 @@ export function LiveMonitorPage() {
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const tickRef = useRef(0)
   const fileRef = useRef<HTMLInputElement>(null)
+  const frameUrlRef = useRef('')
 
   function applyVideos(items: VideoItem[], preferPath?: string) {
     setVideos(items)
@@ -23,13 +23,6 @@ export function LiveMonitorPage() {
       items.find((v) => v.path === selected)?.path ||
       items[0].path
     setSelected(pick)
-  }
-
-  function refreshFrame() {
-    // Poll single JPEGs — Chrome often shows a black box for MJPEG <img>
-    const origin = resolveApiOrigin()
-    tickRef.current += 1
-    setFrameUrl(`${origin}/api/live/frame.jpg?t=${Date.now()}_${tickRef.current}`)
   }
 
   async function refreshStatus() {
@@ -52,6 +45,8 @@ export function LiveMonitorPage() {
 
   useEffect(() => {
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
     api.videos()
       .then((r) => {
         if (cancelled) return
@@ -60,15 +55,46 @@ export function LiveMonitorPage() {
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Videos failed — is API on :8001?')
       })
-    refreshStatus()
-    refreshFrame()
-    const statusId = setInterval(refreshStatus, 2000)
-    // ~20 FPS poll so 1× backend playback looks smooth (was 250ms = 4 FPS)
-    const frameId = setInterval(refreshFrame, 50)
+    void refreshStatus()
+    const statusId = setInterval(() => void refreshStatus(), 2000)
+
+    // Fetch→blob one frame at a time. A 50ms <img src> poll aborts ~300KB
+    // Railway JPEGs mid-download and leaves the placeholder forever.
+    async function pollFrames() {
+      while (!cancelled) {
+        const started = Date.now()
+        try {
+          const origin = resolveApiOrigin()
+          const res = await fetch(`${origin}/api/live/frame.jpg?t=${Date.now()}`, {
+            cache: 'no-store',
+          })
+          if (!res.ok) throw new Error(`frame ${res.status}`)
+          const blob = await res.blob()
+          if (cancelled) break
+          const next = URL.createObjectURL(blob)
+          const prev = frameUrlRef.current
+          frameUrlRef.current = next
+          setFrameUrl(next)
+          if (prev.startsWith('blob:')) URL.revokeObjectURL(prev)
+        } catch {
+          // keep last good frame; retry below
+        }
+        const wait = Math.max(40, 100 - (Date.now() - started))
+        await new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, wait)
+        })
+      }
+    }
+    void pollFrames()
+
     return () => {
       cancelled = true
       clearInterval(statusId)
-      clearInterval(frameId)
+      if (timer) clearTimeout(timer)
+      if (frameUrlRef.current.startsWith('blob:')) {
+        URL.revokeObjectURL(frameUrlRef.current)
+        frameUrlRef.current = ''
+      }
     }
   }, [])
 
@@ -94,7 +120,6 @@ export function LiveMonitorPage() {
     try {
       const s = await api.liveStart(selected)
       setStatus(s)
-      refreshFrame()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Start failed')
     } finally {
@@ -107,7 +132,6 @@ export function LiveMonitorPage() {
     try {
       const s = await api.liveStop()
       setStatus(s)
-      refreshFrame()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Stop failed')
     } finally {
@@ -170,7 +194,8 @@ export function LiveMonitorPage() {
           For persistence across redeploys, mount a Railway volume at <code>data/videos</code>.
         </p>
       )}
-      {error && <p className="error">{error}</p>}      {status?.status === 'error' && status.last_alert && (
+      {error && <p className="error">{error}</p>}
+      {status?.status === 'error' && status.last_alert && (
         <p className="error">
           Monitor error: {status.last_alert}
           {status.last_alert.includes('Application Control') || status.last_alert.includes('_regex') ? (
