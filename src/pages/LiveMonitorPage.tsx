@@ -7,8 +7,23 @@ export function LiveMonitorPage() {
   const [status, setStatus] = useState<LiveStatus | null>(null)
   const [frameUrl, setFrameUrl] = useState('')
   const [busy, setBusy] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const tickRef = useRef(0)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  function applyVideos(items: VideoItem[], preferPath?: string) {
+    setVideos(items)
+    if (!items.length) {
+      setSelected('')
+      return
+    }
+    const pick =
+      (preferPath && items.find((v) => v.path === preferPath)?.path) ||
+      items.find((v) => v.path === selected)?.path ||
+      items[0].path
+    setSelected(pick)
+  }
 
   function refreshFrame() {
     // Poll single JPEGs — Chrome often shows a black box for MJPEG <img>
@@ -40,9 +55,7 @@ export function LiveMonitorPage() {
     api.videos()
       .then((r) => {
         if (cancelled) return
-        const items = Array.isArray(r.items) ? r.items : []
-        setVideos(items)
-        if (items.length) setSelected(items[0].path)
+        applyVideos(Array.isArray(r.items) ? r.items : [])
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Videos failed — is API on :8001?')
@@ -58,6 +71,21 @@ export function LiveMonitorPage() {
       clearInterval(frameId)
     }
   }, [])
+
+  async function onUpload(file: File | undefined) {
+    if (!file) return
+    setUploading(true)
+    setError(null)
+    try {
+      const r = await api.uploadVideo(file)
+      applyVideos(r.items, r.item?.path)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
 
   async function start() {
     if (!selected) return
@@ -112,7 +140,22 @@ export function LiveMonitorPage() {
             ))}
           </select>
         </div>
-        <button className="btn btn-primary" disabled={busy || !selected} onClick={start}>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".mp4,.avi,.mkv,.mov,video/*"
+          hidden
+          onChange={(e) => void onUpload(e.target.files?.[0])}
+        />
+        <button
+          className="btn"
+          type="button"
+          disabled={busy || uploading}
+          onClick={() => fileRef.current?.click()}
+        >
+          {uploading ? 'Uploading…' : 'Upload Video'}
+        </button>
+        <button className="btn btn-primary" disabled={busy || uploading || !selected} onClick={start}>
           {busy ? 'Starting…' : 'Start Monitor'}
         </button>
         <button className="btn btn-danger" disabled={busy || !online} onClick={stop}>
@@ -122,12 +165,12 @@ export function LiveMonitorPage() {
 
       {!error && !videos.length && (
         <p className="error">
-          Backend is online but returned no video files. Add <code>.mp4</code> / <code>.avi</code> files to the
-          backend <code>data/videos</code> folder on Railway (or mount a volume), then refresh.
+          No videos on the Railway backend yet. Click <strong>Upload Video</strong> and choose a local{' '}
+          <code>.mp4</code> (from <code>data/videos</code>), then Start Monitor.
+          For persistence across redeploys, mount a Railway volume at <code>data/videos</code>.
         </p>
       )}
-      {error && <p className="error">{error}</p>}
-      {status?.status === 'error' && status.last_alert && (
+      {error && <p className="error">{error}</p>}      {status?.status === 'error' && status.last_alert && (
         <p className="error">
           Monitor error: {status.last_alert}
           {status.last_alert.includes('Application Control') || status.last_alert.includes('_regex') ? (

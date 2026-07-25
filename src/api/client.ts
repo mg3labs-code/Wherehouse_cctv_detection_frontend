@@ -157,6 +157,19 @@ export const api = {
     const raw = await get<unknown>('/api/videos')
     return { items: normalizeVideos(raw) }
   },
+  uploadVideo: async (file: File) => {
+    const origin = resolveApiOrigin()
+    const url = origin ? `${origin}/api/videos/upload` : '/api/videos/upload'
+    const body = new FormData()
+    body.append('file', file)
+    const res = await fetch(url, { method: 'POST', body })
+    if (!res.ok) {
+      const detail = await res.text()
+      throw new Error(detail || `${res.status} ${res.statusText}`)
+    }
+    const raw = (await res.json()) as { items?: unknown; item?: VideoItem }
+    return { items: normalizeVideos(raw), item: raw.item }
+  },
   liveStatus: async (): Promise<LiveStatus> => {
     try {
       const s = await get<Partial<LiveStatus>>('/api/live/status')
