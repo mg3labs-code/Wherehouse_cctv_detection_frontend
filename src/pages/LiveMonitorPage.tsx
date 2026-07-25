@@ -103,7 +103,8 @@ export function LiveMonitorPage() {
       <div className="filters">
         <div className="filter-field" style={{ minWidth: 320, flex: 1 }}>
           <label>Video Source</label>
-          <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+          <select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={!videos.length}>
+            {!videos.length && <option value="">No videos on backend</option>}
             {videos.map((v) => (
               <option key={v.path} value={v.path}>
                 {v.id}. {v.name} ({v.size_mb} MB)
@@ -119,6 +120,12 @@ export function LiveMonitorPage() {
         </button>
       </div>
 
+      {!error && !videos.length && (
+        <p className="error">
+          Backend is online but returned no video files. Add <code>.mp4</code> / <code>.avi</code> files to the
+          backend <code>data/videos</code> folder on Railway (or mount a volume), then refresh.
+        </p>
+      )}
       {error && <p className="error">{error}</p>}
       {status?.status === 'error' && status.last_alert && (
         <p className="error">
