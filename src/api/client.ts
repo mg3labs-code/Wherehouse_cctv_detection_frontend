@@ -18,13 +18,18 @@ export type Summary = {
   medium_severity: number
   by_type: Record<string, number>
   online: boolean
+  data_source?: string
 }
 
 export type SeriesPoint = {
   date: string
-  incidents: number
-  overrides: number
-  emergency: number
+  alerts: number
+  medium: number
+  high: number
+  /** @deprecated old demo-style keys — kept optional for older backends */
+  incidents?: number
+  overrides?: number
+  emergency?: number
 }
 
 export type Violation = {

@@ -43,6 +43,7 @@ export function SafetyAnalyticsPage() {
   const [dateVal, setDateVal] = useState(() => new Date().toISOString().slice(0, 10))
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
 
   const wsParam = worksite === 'all' ? undefined : worksite
 
@@ -57,7 +58,16 @@ export function SafetyAnalyticsPage() {
       ])
       setWorksites(ws.worksites)
       setSummary(sum)
-      setSeries(ts.series)
+      // Normalize old demo-style keys if an older backend is still deployed
+      setSeries(
+        (ts.series || []).map((p) => ({
+          date: p.date,
+          alerts: p.alerts ?? p.incidents ?? 0,
+          medium: p.medium ?? p.overrides ?? 0,
+          high: p.high ?? p.emergency ?? 0,
+        })),
+      )
+      setUpdatedAt(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load analytics')
     } finally {
@@ -67,7 +77,7 @@ export function SafetyAnalyticsPage() {
 
   useEffect(() => {
     load()
-    const id = setInterval(load, 15000)
+    const id = setInterval(load, 5000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worksite])
@@ -75,11 +85,16 @@ export function SafetyAnalyticsPage() {
   const delta = useMemo(() => {
     if (series.length < 2) return 0
     const mid = Math.floor(series.length / 2)
-    const a = series.slice(0, mid).reduce((s, p) => s + p.incidents, 0)
-    const b = series.slice(mid).reduce((s, p) => s + p.incidents, 0)
-    if (a === 0) return 0
+    const a = series.slice(0, mid).reduce((s, p) => s + p.alerts, 0)
+    const b = series.slice(mid).reduce((s, p) => s + p.alerts, 0)
+    if (a === 0) return b > 0 ? 100 : 0
     return Math.round(((b - a) / a) * 100)
   }, [series])
+
+  const dayAlerts = useMemo(() => {
+    const row = series.find((p) => p.date === dateVal)
+    return row?.alerts ?? 0
+  }, [series, dateVal])
 
   return (
     <>
@@ -98,10 +113,15 @@ export function SafetyAnalyticsPage() {
         </div>
         <span className={`status-online ${summary?.online ? '' : 'offline'}`}>
           <span className="dot" />
-          {summary?.online ? 'Online' : 'Offline'}
+          {summary?.online ? 'Online · live' : 'Offline'}
         </span>
       </div>
 
+      <p className="muted" style={{ margin: '0 0 12px' }}>
+        Real-time alerts from Live Monitor (YOLO), not demo seed data.
+        {updatedAt ? ` Updated ${updatedAt.toLocaleTimeString()}.` : ''}
+        {dateVal ? ` Selected day (${formatDateLabel(dateVal)}): ${fmt(dayAlerts)} alerts.` : ''}
+      </p>
       <div className="filters">
         <div className="filter-row">
           <div className="filter-field grow">
@@ -172,8 +192,8 @@ export function SafetyAnalyticsPage() {
           </div>
           <div className="kpi">
             <div className="kpi-text">
-              <div className="label">Incidents Prevented</div>
-              <div className="value">{fmt(summary.incidents_prevented)}</div>
+              <div className="label">Total Alerts</div>
+              <div className="value">{fmt(summary.total_alerts ?? summary.incidents_prevented)}</div>
             </div>
             <div className="kpi-ico">
               <IconImpact />
@@ -215,19 +235,19 @@ export function SafetyAnalyticsPage() {
             <h3>Safety Stats</h3>
             <div className="legend-inline">
               <span>
-                <i className="lg blue" /> Incidents Prevented
+                <i className="lg blue" /> Total Alerts
               </span>
               <span>
-                <i className="lg teal" /> Overrides Pressed
+                <i className="lg teal" /> Medium Severity
               </span>
               <span>
-                <i className="lg purple" /> Emergency Stops
+                <i className="lg purple" /> High Severity
               </span>
             </div>
           </div>
           <div className="chart-body">
             <div className="chart-callout">
-              {delta <= 0 ? `${Math.abs(delta)}% ↓` : `${delta}% ↑`} Incidents since prior period
+              {delta <= 0 ? `${Math.abs(delta)}% ↓` : `${delta}% ↑`} Alerts vs prior half of window
             </div>
             <div className="chart-plot">
               <ResponsiveContainer width="100%" height="100%">
@@ -244,13 +264,14 @@ export function SafetyAnalyticsPage() {
                     tick={{ fontSize: 11, fill: '#8a94a6' }}
                     axisLine={false}
                     tickLine={false}
+                    allowDecimals={false}
                   />
                   <Tooltip />
                   <Legend content={() => null} />
                   <Line
                     type="monotone"
-                    dataKey="incidents"
-                    name="Incidents Prevented"
+                    dataKey="alerts"
+                    name="Total Alerts"
                     stroke="#1e5bb8"
                     strokeWidth={2.5}
                     dot={{ r: 3, fill: '#1e5bb8' }}
@@ -258,16 +279,16 @@ export function SafetyAnalyticsPage() {
                   />
                   <Line
                     type="monotone"
-                    dataKey="overrides"
-                    name="Overrides Pressed"
+                    dataKey="medium"
+                    name="Medium Severity"
                     stroke="#5ec8d8"
                     strokeWidth={2.5}
                     dot={{ r: 3, fill: '#5ec8d8' }}
                   />
                   <Line
                     type="monotone"
-                    dataKey="emergency"
-                    name="Emergency Stops"
+                    dataKey="high"
+                    name="High Severity"
                     stroke="#5b4db8"
                     strokeWidth={2.5}
                     dot={{ r: 3, fill: '#5b4db8' }}
@@ -283,7 +304,7 @@ export function SafetyAnalyticsPage() {
             <h3>Alert Volume</h3>
             <div className="legend-inline">
               <span>
-                <i className="lg blue" /> Daily Alerts
+                <i className="lg blue" /> Daily Alerts (live)
               </span>
             </div>
           </div>
@@ -307,7 +328,7 @@ export function SafetyAnalyticsPage() {
                   />
                   <Tooltip />
                   <Bar
-                    dataKey="incidents"
+                    dataKey="alerts"
                     name="Daily Alerts"
                     fill="#2f6fdb"
                     radius={[3, 3, 0, 0]}
