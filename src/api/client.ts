@@ -191,6 +191,11 @@ export const api = {
     const raw = await get<unknown>('/api/videos')
     return { items: normalizeVideos(raw) }
   },
+  videoUrl: (name: string) => {
+    const qs = new URLSearchParams({ name })
+    const origin = resolveApiOrigin()
+    return origin ? `${origin}/api/videos/file?${qs}` : `/api/videos/file?${qs}`
+  },
   uploadVideo: async (file: File) => {
     const origin = resolveApiOrigin()
     const url = origin ? `${origin}/api/videos/upload` : '/api/videos/upload'
