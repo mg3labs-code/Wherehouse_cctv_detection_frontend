@@ -21,6 +21,8 @@ import {
   IconImpact,
 } from '../components/icons'
 
+type FilterBy = 'all' | 'assets' | 'operators' | 'alerts'
+
 function fmt(n: number) {
   return new Intl.NumberFormat('en-US').format(n)
 }
@@ -35,17 +37,70 @@ function formatDateLabel(iso: string) {
   })
 }
 
+function defaultScope(filterBy: FilterBy): string {
+  if (filterBy === 'assets') return 'all'
+  if (filterBy === 'operators') return 'ppe'
+  if (filterBy === 'alerts') return 'all'
+  return 'all'
+}
+
+function scopeOptions(filterBy: FilterBy): { value: string; label: string }[] {
+  if (filterBy === 'assets') {
+    return [
+      { value: 'all', label: 'All Assets' },
+      { value: 'forklift', label: 'Forklifts' },
+      { value: 'cameras', label: 'Cameras' },
+    ]
+  }
+  if (filterBy === 'operators') {
+    return [
+      { value: 'ppe', label: 'All PPE alerts' },
+      { value: 'helmet', label: 'No Helmet' },
+      { value: 'vest', label: 'No Vest' },
+    ]
+  }
+  if (filterBy === 'alerts') {
+    return [
+      { value: 'all', label: 'All Alerts' },
+      { value: 'high', label: 'High severity' },
+      { value: 'medium', label: 'Medium severity' },
+      { value: 'NO_HELMET', label: 'NO_HELMET' },
+      { value: 'NO_VEST', label: 'NO_VEST' },
+      { value: 'FORKLIFT_OVERSPEED', label: 'FORKLIFT_OVERSPEED' },
+    ]
+  }
+  return [{ value: 'all', label: 'All' }]
+}
+
+function scopeLabel(filterBy: FilterBy) {
+  if (filterBy === 'assets') return 'Select Asset'
+  if (filterBy === 'operators') return 'Operator focus'
+  if (filterBy === 'alerts') return 'Alert type'
+  return 'Scope'
+}
+
 export function SafetyAnalyticsPage() {
   const [worksite, setWorksite] = useState('all')
   const [worksites, setWorksites] = useState<string[]>([])
+  const [dateVal, setDateVal] = useState(() => new Date().toISOString().slice(0, 10))
+  const [filterBy, setFilterBy] = useState<FilterBy>('all')
+  const [scope, setScope] = useState('all')
+
   const [summary, setSummary] = useState<Summary | null>(null)
   const [series, setSeries] = useState<SeriesPoint[]>([])
-  const [dateVal, setDateVal] = useState(() => new Date().toISOString().slice(0, 10))
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
 
-  const wsParam = worksite === 'all' ? undefined : worksite
+  const filterOpts = useMemo(
+    () => ({
+      worksite: worksite === 'all' ? undefined : worksite,
+      day: dateVal || undefined,
+      category: filterBy === 'all' ? undefined : filterBy,
+      scope: filterBy === 'all' ? undefined : scope,
+    }),
+    [worksite, dateVal, filterBy, scope],
+  )
 
   async function load() {
     setLoading(true)
@@ -53,12 +108,15 @@ export function SafetyAnalyticsPage() {
     try {
       const [ws, sum, ts] = await Promise.all([
         api.worksites(),
-        api.summary(wsParam),
-        api.timeseries(14, wsParam),
+        api.summary(filterOpts),
+        api.timeseries(14, {
+          worksite: filterOpts.worksite,
+          category: filterOpts.category,
+          scope: filterOpts.scope,
+        }),
       ])
       setWorksites(ws.worksites)
       setSummary(sum)
-      // Normalize old demo-style keys if an older backend is still deployed
       setSeries(
         (ts.series || []).map((p) => ({
           date: p.date,
@@ -76,11 +134,11 @@ export function SafetyAnalyticsPage() {
   }
 
   useEffect(() => {
-    load()
-    const id = setInterval(load, 5000)
+    void load()
+    const id = setInterval(() => void load(), 5000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [worksite])
+  }, [filterOpts.worksite, filterOpts.day, filterOpts.category, filterOpts.scope])
 
   const delta = useMemo(() => {
     if (series.length < 2) return 0
@@ -95,6 +153,18 @@ export function SafetyAnalyticsPage() {
     const row = series.find((p) => p.date === dateVal)
     return row?.alerts ?? 0
   }, [series, dateVal])
+
+  const chartSeries = useMemo(() => {
+    // Daily View focuses charts around the selected day (still show full window)
+    return series
+  }, [series])
+
+  function onFilterByChange(next: FilterBy) {
+    setFilterBy(next)
+    setScope(defaultScope(next))
+  }
+
+  const secondaryOptions = scopeOptions(filterBy)
 
   return (
     <>
@@ -120,11 +190,12 @@ export function SafetyAnalyticsPage() {
       <p className="muted" style={{ margin: '0 0 12px' }}>
         Real-time alerts from Live Monitor (YOLO), not demo seed data.
         {updatedAt ? ` Updated ${updatedAt.toLocaleTimeString()}.` : ''}
-        {dateVal ? ` Selected day (${formatDateLabel(dateVal)}): ${fmt(dayAlerts)} alerts.` : ''}
+        {` Selected day (${formatDateLabel(dateVal)}): ${fmt(dayAlerts)} alerts in chart · KPIs use that day.`}
       </p>
       <div className="filters">
         <div className="filter-row">
           <div className="filter-field grow">
+            <label>Worksite</label>
             <select value={worksite} onChange={(e) => setWorksite(e.target.value)}>
               <option value="all">--All Worksites--</option>
               {worksites.map((w) => (
@@ -146,7 +217,7 @@ export function SafetyAnalyticsPage() {
               <span className="date-display">{formatDateLabel(dateVal)}</span>
             </div>
           </div>
-          <button type="button" className="btn btn-filters" onClick={load}>
+          <button type="button" className="btn btn-filters" onClick={() => void load()}>
             <IconFilter />
             FILTERS
           </button>
@@ -154,18 +225,28 @@ export function SafetyAnalyticsPage() {
         <div className="filter-row secondary">
           <div className="filter-field">
             <label>Filter by</label>
-            <select defaultValue="assets">
+            <select
+              value={filterBy}
+              onChange={(e) => onFilterByChange(e.target.value as FilterBy)}
+            >
+              <option value="all">All</option>
               <option value="assets">Assets</option>
               <option value="operators">Operators</option>
               <option value="alerts">Alerts</option>
             </select>
           </div>
           <div className="filter-field">
-            <label>Select Asset</label>
-            <select defaultValue="all">
-              <option value="all">All Assets</option>
-              <option value="forklift">Forklifts</option>
-              <option value="cameras">Cameras</option>
+            <label>{scopeLabel(filterBy)}</label>
+            <select
+              value={scope}
+              disabled={filterBy === 'all'}
+              onChange={(e) => setScope(e.target.value)}
+            >
+              {secondaryOptions.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -251,7 +332,7 @@ export function SafetyAnalyticsPage() {
             </div>
             <div className="chart-plot">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={series} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+                <LineChart data={chartSeries} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e6ebf2" vertical={false} />
                   <XAxis
                     dataKey="date"
@@ -311,7 +392,7 @@ export function SafetyAnalyticsPage() {
           <div className="chart-body">
             <div className="chart-plot">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={series} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+                <BarChart data={chartSeries} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e6ebf2" vertical={false} />
                   <XAxis
                     dataKey="date"

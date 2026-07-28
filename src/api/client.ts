@@ -148,12 +148,31 @@ export const api = {
 
   health: () => get<Record<string, unknown>>('/api/health'),
   worksites: () => get<{ worksites: string[] }>('/api/worksites'),
-  summary: (worksite?: string) =>
-    get<Summary>(`/api/analytics/summary${worksite ? `?worksite=${encodeURIComponent(worksite)}` : ''}`),
-  timeseries: (days = 14, worksite?: string) =>
-    get<{ series: SeriesPoint[] }>(
-      `/api/analytics/timeseries?days=${days}${worksite ? `&worksite=${encodeURIComponent(worksite)}` : ''}`,
-    ),
+  summary: (opts?: {
+    worksite?: string
+    day?: string
+    category?: string
+    scope?: string
+  }) => {
+    const qs = new URLSearchParams()
+    if (opts?.worksite) qs.set('worksite', opts.worksite)
+    if (opts?.day) qs.set('day', opts.day)
+    if (opts?.category && opts.category !== 'all') qs.set('category', opts.category)
+    if (opts?.scope && opts.scope !== 'all') qs.set('scope', opts.scope)
+    const q = qs.toString()
+    return get<Summary>(`/api/analytics/summary${q ? `?${q}` : ''}`)
+  },
+  timeseries: (
+    days = 14,
+    opts?: { worksite?: string; category?: string; scope?: string },
+  ) => {
+    const qs = new URLSearchParams()
+    qs.set('days', String(days))
+    if (opts?.worksite) qs.set('worksite', opts.worksite)
+    if (opts?.category && opts.category !== 'all') qs.set('category', opts.category)
+    if (opts?.scope && opts.scope !== 'all') qs.set('scope', opts.scope)
+    return get<{ series: SeriesPoint[] }>(`/api/analytics/timeseries?${qs}`)
+  },
   violations: (limit = 50, worksite?: string, sinceHours?: number) => {
     const qs = new URLSearchParams()
     qs.set('limit', String(limit))
