@@ -19,6 +19,9 @@ export type Summary = {
   by_type: Record<string, number>
   online: boolean
   data_source?: string
+  filter_day?: string | null
+  filter_category?: string
+  filter_scope?: string
 }
 
 export type SeriesPoint = {
@@ -157,8 +160,10 @@ export const api = {
     const qs = new URLSearchParams()
     if (opts?.worksite) qs.set('worksite', opts.worksite)
     if (opts?.day) qs.set('day', opts.day)
-    if (opts?.category && opts.category !== 'all') qs.set('category', opts.category)
-    if (opts?.scope && opts.scope !== 'all') qs.set('scope', opts.scope)
+    if (opts?.category && opts.category !== 'all') {
+      qs.set('category', opts.category)
+      qs.set('scope', opts.scope || 'all')
+    }
     const q = qs.toString()
     return get<Summary>(`/api/analytics/summary${q ? `?${q}` : ''}`)
   },
@@ -169,8 +174,10 @@ export const api = {
     const qs = new URLSearchParams()
     qs.set('days', String(days))
     if (opts?.worksite) qs.set('worksite', opts.worksite)
-    if (opts?.category && opts.category !== 'all') qs.set('category', opts.category)
-    if (opts?.scope && opts.scope !== 'all') qs.set('scope', opts.scope)
+    if (opts?.category && opts.category !== 'all') {
+      qs.set('category', opts.category)
+      qs.set('scope', opts.scope || 'all')
+    }
     return get<{ series: SeriesPoint[] }>(`/api/analytics/timeseries?${qs}`)
   },
   violations: (limit = 50, worksite?: string, sinceHours?: number) => {

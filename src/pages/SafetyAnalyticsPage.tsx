@@ -102,17 +102,25 @@ export function SafetyAnalyticsPage() {
     [worksite, dateVal, filterBy, scope],
   )
 
+  const filterKey = `${worksite}|${dateVal}|${filterBy}|${scope}`
+
   async function load() {
     setLoading(true)
     setError(null)
     try {
+      const opts = {
+        worksite: worksite === 'all' ? undefined : worksite,
+        day: dateVal || undefined,
+        category: filterBy === 'all' ? undefined : filterBy,
+        scope: filterBy === 'all' ? undefined : scope,
+      }
       const [ws, sum, ts] = await Promise.all([
         api.worksites(),
-        api.summary(filterOpts),
+        api.summary(opts),
         api.timeseries(14, {
-          worksite: filterOpts.worksite,
-          category: filterOpts.category,
-          scope: filterOpts.scope,
+          worksite: opts.worksite,
+          category: opts.category,
+          scope: opts.scope,
         }),
       ])
       setWorksites(ws.worksites)
@@ -138,7 +146,7 @@ export function SafetyAnalyticsPage() {
     const id = setInterval(() => void load(), 5000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterOpts.worksite, filterOpts.day, filterOpts.category, filterOpts.scope])
+  }, [filterKey])
 
   const delta = useMemo(() => {
     if (series.length < 2) return 0
@@ -190,7 +198,10 @@ export function SafetyAnalyticsPage() {
       <p className="muted" style={{ margin: '0 0 12px' }}>
         Real-time alerts from Live Monitor (YOLO), not demo seed data.
         {updatedAt ? ` Updated ${updatedAt.toLocaleTimeString()}.` : ''}
-        {` Selected day (${formatDateLabel(dateVal)}): ${fmt(dayAlerts)} alerts in chart · KPIs use that day.`}
+        {` Selected day (${formatDateLabel(dateVal)}): ${fmt(dayAlerts)} chart alerts.`}
+        {summary
+          ? ` Active filter: ${summary.filter_category || filterBy} / ${summary.filter_scope || scope} → ${fmt(summary.total_alerts ?? 0)} KPI alerts.`
+          : ''}
       </p>
       <div className="filters">
         <div className="filter-row">
@@ -260,7 +271,7 @@ export function SafetyAnalyticsPage() {
       {loading && !summary && <p className="muted">Loading analytics…</p>}
 
       {summary && (
-        <div className="kpi-row">
+        <div className="kpi-row" key={filterKey}>
           <div className="kpi">
             <div className="kpi-text">
               <div className="label">Safety Score</div>
