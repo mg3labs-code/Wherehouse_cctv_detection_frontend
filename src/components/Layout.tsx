@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useState, type ReactNode } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import {
   IconChart,
@@ -21,7 +21,7 @@ type NavItem = {
   icon: ReactNode
   end?: boolean
   chevron?: boolean
-  action?: () => void
+  action?: 'logout'
 }
 
 const primary: NavItem[] = [
@@ -29,14 +29,15 @@ const primary: NavItem[] = [
   { to: '/', label: 'Analytics', icon: <IconChart />, end: true, chevron: true },
   { to: '/live', label: 'Live Monitor', icon: <IconLive /> },
   { to: '/reports', label: 'Reports', icon: <IconDoc />, chevron: true },
-  { label: 'Checklist Settings', icon: <IconChecklist /> },
-  { label: 'Management', icon: <IconOrg />, chevron: true },
+  { to: '/checklist-settings', label: 'Checklist Settings', icon: <IconChecklist /> },
+  { to: '/management', label: 'Management', icon: <IconOrg />, chevron: true },
   { to: '/settings', label: 'Settings', icon: <IconSliders />, chevron: true },
-  { label: 'Help Center', icon: <IconHelp /> },
-  { label: 'Logout', icon: <IconPower /> },
+  { to: '/help', label: 'Help Center', icon: <IconHelp /> },
+  { label: 'Logout', icon: <IconPower />, action: 'logout' },
 ]
 
 export function Layout() {
+  const navigate = useNavigate()
   const [apiOk, setApiOk] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -93,6 +94,22 @@ export function Layout() {
                 </NavLink>
               )
             }
+            if (item.action === 'logout') {
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  className="nav-item nav-btn"
+                  onClick={() => {
+                    if (window.confirm('Log out of Hypervis Warehouse Safety?')) {
+                      window.location.href = '/'
+                    }
+                  }}
+                >
+                  {body}
+                </button>
+              )
+            }
             return (
               <button key={item.label} type="button" className="nav-item nav-btn">
                 {body}
@@ -110,7 +127,13 @@ export function Layout() {
               <IconFlag />
               <span>EN</span>
             </button>
-            <button type="button" className="icon-btn" title="Help" aria-label="Help">
+            <button
+              type="button"
+              className="icon-btn"
+              title="Help"
+              aria-label="Help"
+              onClick={() => navigate('/help')}
+            >
               <IconHelp />
             </button>
           </div>
