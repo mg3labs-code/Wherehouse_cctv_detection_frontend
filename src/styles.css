@@ -497,6 +497,50 @@ button { cursor: pointer; }
   gap: 8px 16px;
   margin-bottom: 8px;
 }
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+.report-actions .filter-field {
+  margin: 0;
+  min-width: 140px;
+}
+.report-actions .btn {
+  height: 38px;
+  padding: 0 16px;
+}
+.report-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 4px 0 10px;
+}
+.schedule-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
+.schedule-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand);
+}
+.report-schedule .btn {
+  background: #eef3fa;
+  color: var(--brand);
+  height: 34px;
+  padding: 0 14px;
+}
+.report-schedule .btn:hover {
+  background: #e2eaf6;
+}
 .legend-inline {
   display: flex;
   flex-wrap: wrap;

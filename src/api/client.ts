@@ -154,10 +154,13 @@ export const api = {
     get<{ series: SeriesPoint[] }>(
       `/api/analytics/timeseries?days=${days}${worksite ? `&worksite=${encodeURIComponent(worksite)}` : ''}`,
     ),
-  violations: (limit = 50, worksite?: string) =>
-    get<{ items: Violation[] }>(
-      `/api/violations?limit=${limit}${worksite ? `&worksite=${encodeURIComponent(worksite)}` : ''}`,
-    ),
+  violations: (limit = 50, worksite?: string, sinceHours?: number) => {
+    const qs = new URLSearchParams()
+    qs.set('limit', String(limit))
+    if (worksite) qs.set('worksite', worksite)
+    if (sinceHours != null) qs.set('since_hours', String(sinceHours))
+    return get<{ items: Violation[] }>(`/api/violations?${qs}`)
+  },
   videos: async () => {
     const raw = await get<unknown>('/api/videos')
     return { items: normalizeVideos(raw) }
