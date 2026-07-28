@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { resolveApiOrigin, api, type LiveStatus, type VideoItem } from '../api/client'
 
 export function LiveMonitorPage() {
+  const [searchParams] = useSearchParams()
+  const sourceParam = searchParams.get('source') || ''
+  const autostart = searchParams.get('autostart') === '1'
   const [videos, setVideos] = useState<VideoItem[]>([])
   const [selected, setSelected] = useState('')
   const [status, setStatus] = useState<LiveStatus | null>(null)
@@ -11,6 +15,7 @@ export function LiveMonitorPage() {
   const [error, setError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const frameUrlRef = useRef('')
+  const autostartRef = useRef(false)
 
   function applyVideos(items: VideoItem[], preferPath?: string) {
     setVideos(items)
@@ -43,6 +48,21 @@ export function LiveMonitorPage() {
     }
   }
 
+  async function startWithSource(path: string) {
+    if (!path) return
+    setBusy(true)
+    setError(null)
+    try {
+      const s = await api.liveStart(path)
+      setStatus(s)
+      setSelected(path)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Start failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -50,7 +70,13 @@ export function LiveMonitorPage() {
     api.videos()
       .then((r) => {
         if (cancelled) return
-        applyVideos(Array.isArray(r.items) ? r.items : [])
+        const items = Array.isArray(r.items) ? r.items : []
+        const prefer = sourceParam || undefined
+        applyVideos(items, prefer)
+        if (autostart && prefer && !autostartRef.current) {
+          autostartRef.current = true
+          void startWithSource(prefer)
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Videos failed — is API on :8001?')
@@ -98,6 +124,11 @@ export function LiveMonitorPage() {
     }
   }, [])
 
+  async function start() {
+    if (!selected) return
+    await startWithSource(selected)
+  }
+
   async function onUpload(file: File | undefined) {
     if (!file) return
     setUploading(true)
@@ -110,20 +141,6 @@ export function LiveMonitorPage() {
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''
-    }
-  }
-
-  async function start() {
-    if (!selected) return
-    setBusy(true)
-    setError(null)
-    try {
-      const s = await api.liveStart(selected)
-      setStatus(s)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Start failed')
-    } finally {
-      setBusy(false)
     }
   }
 
