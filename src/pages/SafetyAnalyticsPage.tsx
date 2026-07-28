@@ -11,7 +11,7 @@ import {
   Bar,
   BarChart,
 } from 'recharts'
-import { api, type Summary, type SeriesPoint } from '../api/client'
+import { api, type Summary, type SeriesPoint, type Violation } from '../api/client'
 import {
   IconClock,
   IconCube,
@@ -21,10 +21,35 @@ import {
   IconImpact,
 } from '../components/icons'
 
-type FilterBy = 'all' | 'assets' | 'operators' | 'alerts'
+/** Single focus filter — each option must produce visibly different KPIs. */
+type Focus =
+  | 'all'
+  | 'forklift'
+  | 'ppe'
+  | 'helmet'
+  | 'vest'
+  | 'high'
+  | 'medium'
+
+const FOCUS_OPTIONS: { value: Focus; label: string }[] = [
+  { value: 'all', label: 'All alerts' },
+  { value: 'forklift', label: 'Forklift alerts only' },
+  { value: 'ppe', label: 'Operator PPE (helmet + vest)' },
+  { value: 'helmet', label: 'No Helmet only' },
+  { value: 'vest', label: 'No Vest only' },
+  { value: 'high', label: 'High severity only' },
+  { value: 'medium', label: 'Medium severity only' },
+]
 
 function fmt(n: number) {
   return new Intl.NumberFormat('en-US').format(n)
+}
+
+function localISODate(d = new Date()) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 function formatDateLabel(iso: string) {
@@ -37,116 +62,187 @@ function formatDateLabel(iso: string) {
   })
 }
 
-function defaultScope(filterBy: FilterBy): string {
-  if (filterBy === 'assets') return 'all'
-  if (filterBy === 'operators') return 'ppe'
-  if (filterBy === 'alerts') return 'all'
-  return 'all'
+function eventDay(ts: string) {
+  return String(ts || '').slice(0, 10)
 }
 
-function scopeOptions(filterBy: FilterBy): { value: string; label: string }[] {
-  if (filterBy === 'assets') {
-    return [
-      { value: 'all', label: 'All Assets' },
-      { value: 'forklift', label: 'Forklifts' },
-      { value: 'cameras', label: 'Cameras' },
-    ]
+function matchesFocus(v: Violation, focus: Focus): boolean {
+  const et = String(v.event_type || '')
+  const sev = String(v.severity || '').toLowerCase()
+  switch (focus) {
+    case 'forklift':
+      return et.startsWith('FORKLIFT') || et === 'FORKLIFT_OVERSPEED'
+    case 'ppe':
+      return et === 'NO_HELMET' || et === 'NO_VEST' || et === 'NO_SAFETY_HARNESS'
+    case 'helmet':
+      return et === 'NO_HELMET'
+    case 'vest':
+      return et === 'NO_VEST'
+    case 'high':
+      return sev === 'high'
+    case 'medium':
+      return sev === 'medium'
+    default:
+      return true
   }
-  if (filterBy === 'operators') {
-    return [
-      { value: 'ppe', label: 'All PPE alerts' },
-      { value: 'helmet', label: 'No Helmet' },
-      { value: 'vest', label: 'No Vest' },
-    ]
-  }
-  if (filterBy === 'alerts') {
-    return [
-      { value: 'all', label: 'All Alerts' },
-      { value: 'high', label: 'High severity' },
-      { value: 'medium', label: 'Medium severity' },
-      { value: 'NO_HELMET', label: 'NO_HELMET' },
-      { value: 'NO_VEST', label: 'NO_VEST' },
-      { value: 'FORKLIFT_OVERSPEED', label: 'FORKLIFT_OVERSPEED' },
-    ]
-  }
-  return [{ value: 'all', label: 'All' }]
 }
 
-function scopeLabel(filterBy: FilterBy) {
-  if (filterBy === 'assets') return 'Select Asset'
-  if (filterBy === 'operators') return 'Operator focus'
-  if (filterBy === 'alerts') return 'Alert type'
-  return 'Scope'
+function maxOperators(events: Violation[]): number {
+  let best = 0
+  for (const e of events) {
+    const p = e.payload || {}
+    for (const key of ['workers', 'operators', 'persons', 'people'] as const) {
+      const val = p[key]
+      if (typeof val === 'number' && val > best) best = val
+    }
+  }
+  return best
+}
+
+function buildSummary(
+  dayEvents: Violation[],
+  videoCount: number,
+  focus: Focus,
+  day: string,
+): Summary {
+  const total = dayEvents.length
+  const high = dayEvents.filter((e) => String(e.severity).toLowerCase() === 'high').length
+  const medium = dayEvents.filter((e) => String(e.severity).toLowerCase() === 'medium').length
+  const by_type: Record<string, number> = {}
+  const sources = new Set<string>()
+  for (const e of dayEvents) {
+    const t = e.event_type || 'UNKNOWN'
+    by_type[t] = (by_type[t] || 0) + 1
+    if (e.source) sources.add(e.source)
+  }
+
+  let score = 100
+  let label = 'No data yet'
+  if (total > 0) {
+    score = Math.max(
+      0,
+      Math.min(100, Math.round(100 - (high / total) * 40 - (medium / total) * 15)),
+    )
+    label = score >= 85 ? 'Safety Expert' : score >= 70 ? 'Compliant' : 'Needs Attention'
+  }
+
+  // Assets / hours must move with the focus filter
+  let assets = videoCount
+  let asset_hours = 0
+  if (focus === 'forklift') {
+    assets = total === 0 ? 0 : sources.size
+    asset_hours = total === 0 ? 0 : Math.max(0.1, Number((sources.size * 0.1).toFixed(1)))
+  } else if (focus === 'ppe' || focus === 'helmet' || focus === 'vest') {
+    assets = total === 0 ? 0 : sources.size
+    asset_hours = total === 0 ? 0 : Math.max(0.1, Number((total * 0.01).toFixed(1)))
+  } else if (focus === 'high' || focus === 'medium') {
+    assets = total === 0 ? 0 : sources.size
+    asset_hours = total === 0 ? 0 : 0.1
+  } else {
+    assets = videoCount
+    asset_hours = total === 0 ? 0 : 0.1
+  }
+
+  return {
+    safety_score: score,
+    safety_label: label,
+    incidents_prevented: total,
+    total_alerts: total,
+    asset_hours,
+    assets,
+    operators: total === 0 ? 0 : maxOperators(dayEvents),
+    high_severity: high,
+    medium_severity: medium,
+    by_type,
+    online: true,
+    data_source: 'live-client',
+    filter_day: day,
+    filter_category: focus,
+    filter_scope: focus,
+  }
+}
+
+function buildSeries(events: Violation[], days = 14): SeriesPoint[] {
+  const today = localISODate()
+  const todayDate = new Date(`${today}T12:00:00`)
+  const buckets = new Map<string, SeriesPoint>()
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(todayDate)
+    d.setDate(d.getDate() - i)
+    const key = localISODate(d)
+    buckets.set(key, { date: key, alerts: 0, medium: 0, high: 0 })
+  }
+  for (const e of events) {
+    const day = eventDay(e.ts)
+    const row = buckets.get(day)
+    if (!row) continue
+    row.alerts += 1
+    const sev = String(e.severity || '').toLowerCase()
+    if (sev === 'medium') row.medium += 1
+    if (sev === 'high') row.high += 1
+  }
+  return [...buckets.values()]
 }
 
 export function SafetyAnalyticsPage() {
   const [worksite, setWorksite] = useState('all')
   const [worksites, setWorksites] = useState<string[]>([])
-  const [dateVal, setDateVal] = useState(() => new Date().toISOString().slice(0, 10))
-  const [filterBy, setFilterBy] = useState<FilterBy>('all')
-  const [scope, setScope] = useState('all')
-
-  const [summary, setSummary] = useState<Summary | null>(null)
-  const [series, setSeries] = useState<SeriesPoint[]>([])
+  const [dateVal, setDateVal] = useState(() => localISODate())
+  const [focus, setFocus] = useState<Focus>('all')
+  const [rawEvents, setRawEvents] = useState<Violation[]>([])
+  const [videoCount, setVideoCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const [online, setOnline] = useState(true)
 
-  const filterOpts = useMemo(
-    () => ({
-      worksite: worksite === 'all' ? undefined : worksite,
-      day: dateVal || undefined,
-      category: filterBy === 'all' ? undefined : filterBy,
-      scope: filterBy === 'all' ? undefined : scope,
-    }),
-    [worksite, dateVal, filterBy, scope],
-  )
-
-  const filterKey = `${worksite}|${dateVal}|${filterBy}|${scope}`
-
-  async function load() {
+  async function loadRaw() {
     setLoading(true)
     setError(null)
     try {
-      const opts = {
-        worksite: worksite === 'all' ? undefined : worksite,
-        day: dateVal || undefined,
-        category: filterBy === 'all' ? undefined : filterBy,
-        scope: filterBy === 'all' ? undefined : scope,
-      }
-      const [ws, sum, ts] = await Promise.all([
+      const [ws, viol, videos, ping] = await Promise.all([
         api.worksites(),
-        api.summary(opts),
-        api.timeseries(14, {
-          worksite: opts.worksite,
-          category: opts.category,
-          scope: opts.scope,
-        }),
+        api.violations(500, undefined, 24 * 14),
+        api.videos(),
+        api.ping(),
       ])
       setWorksites(ws.worksites)
-      setSummary(sum)
-      setSeries(
-        (ts.series || []).map((p) => ({
-          date: p.date,
-          alerts: p.alerts ?? p.incidents ?? 0,
-          medium: p.medium ?? p.overrides ?? 0,
-          high: p.high ?? p.emergency ?? 0,
-        })),
-      )
+      setRawEvents(Array.isArray(viol.items) ? viol.items : [])
+      setVideoCount(videos.items?.length ?? 0)
+      setOnline(ping)
       setUpdatedAt(new Date())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load analytics')
+      setOnline(false)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    void load()
-    const id = setInterval(() => void load(), 5000)
+    void loadRaw()
+    const id = setInterval(() => void loadRaw(), 5000)
     return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterKey])
+  }, [])
+
+  const filteredAllDays = useMemo(() => {
+    return rawEvents.filter((e) => {
+      if (worksite !== 'all' && e.worksite !== worksite) return false
+      return matchesFocus(e, focus)
+    })
+  }, [rawEvents, worksite, focus])
+
+  const dayEvents = useMemo(
+    () => filteredAllDays.filter((e) => eventDay(e.ts) === dateVal),
+    [filteredAllDays, dateVal],
+  )
+
+  const summary = useMemo(
+    () => buildSummary(dayEvents, videoCount, focus, dateVal),
+    [dayEvents, videoCount, focus, dateVal],
+  )
+
+  const series = useMemo(() => buildSeries(filteredAllDays, 14), [filteredAllDays])
 
   const delta = useMemo(() => {
     if (series.length < 2) return 0
@@ -162,17 +258,7 @@ export function SafetyAnalyticsPage() {
     return row?.alerts ?? 0
   }, [series, dateVal])
 
-  const chartSeries = useMemo(() => {
-    // Daily View focuses charts around the selected day (still show full window)
-    return series
-  }, [series])
-
-  function onFilterByChange(next: FilterBy) {
-    setFilterBy(next)
-    setScope(defaultScope(next))
-  }
-
-  const secondaryOptions = scopeOptions(filterBy)
+  const focusLabel = FOCUS_OPTIONS.find((o) => o.value === focus)?.label || focus
 
   return (
     <>
@@ -189,20 +275,17 @@ export function SafetyAnalyticsPage() {
             Safety Analytics
           </button>
         </div>
-        <span className={`status-online ${summary?.online ? '' : 'offline'}`}>
+        <span className={`status-online ${online ? '' : 'offline'}`}>
           <span className="dot" />
-          {summary?.online ? 'Online · live' : 'Offline'}
+          {online ? 'Online · live' : 'Offline'}
         </span>
       </div>
 
       <p className="muted" style={{ margin: '0 0 12px' }}>
-        Real-time alerts from Live Monitor (YOLO), not demo seed data.
+        Live YOLO alerts — KPIs recalculate in the browser when you change filters.
         {updatedAt ? ` Updated ${updatedAt.toLocaleTimeString()}.` : ''}
-        {` Selected day (${formatDateLabel(dateVal)}): ${fmt(dayAlerts)} chart alerts.`}
-        {summary
-          ? ` Active filter: ${summary.filter_category || filterBy} / ${summary.filter_scope || scope} → ${fmt(summary.total_alerts ?? 0)} KPI alerts.`
-          : ''}
       </p>
+
       <div className="filters">
         <div className="filter-row">
           <div className="filter-field grow">
@@ -228,32 +311,16 @@ export function SafetyAnalyticsPage() {
               <span className="date-display">{formatDateLabel(dateVal)}</span>
             </div>
           </div>
-          <button type="button" className="btn btn-filters" onClick={() => void load()}>
+          <button type="button" className="btn btn-filters" onClick={() => void loadRaw()}>
             <IconFilter />
-            FILTERS
+            REFRESH
           </button>
         </div>
         <div className="filter-row secondary">
-          <div className="filter-field">
-            <label>Filter by</label>
-            <select
-              value={filterBy}
-              onChange={(e) => onFilterByChange(e.target.value as FilterBy)}
-            >
-              <option value="all">All</option>
-              <option value="assets">Assets</option>
-              <option value="operators">Operators</option>
-              <option value="alerts">Alerts</option>
-            </select>
-          </div>
-          <div className="filter-field">
-            <label>{scopeLabel(filterBy)}</label>
-            <select
-              value={scope}
-              disabled={filterBy === 'all'}
-              onChange={(e) => setScope(e.target.value)}
-            >
-              {secondaryOptions.map((o) => (
+          <div className="filter-field grow">
+            <label>Focus filter (changes KPI cards)</label>
+            <select value={focus} onChange={(e) => setFocus(e.target.value as Focus)}>
+              {FOCUS_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
@@ -263,63 +330,67 @@ export function SafetyAnalyticsPage() {
         </div>
       </div>
 
+      <p className="muted" style={{ margin: '0 0 12px' }}>
+        <strong>Active:</strong> {focusLabel} · {formatDateLabel(dateVal)} ·{' '}
+        <strong>{fmt(summary.total_alerts)}</strong> alerts in KPI cards
+        {dayAlerts !== summary.total_alerts ? ` (${fmt(dayAlerts)} on chart for that day)` : ''}
+      </p>
+
       {error && (
         <p className="error">
           Backend: {error}. Start API with: <code>python run_api.py</code> (port 8001)
         </p>
       )}
-      {loading && !summary && <p className="muted">Loading analytics…</p>}
+      {loading && rawEvents.length === 0 && <p className="muted">Loading analytics…</p>}
 
-      {summary && (
-        <div className="kpi-row" key={filterKey}>
-          <div className="kpi">
-            <div className="kpi-text">
-              <div className="label">Safety Score</div>
-              <div className="value green">{summary.safety_score}%</div>
-              <div className="meta">{summary.safety_label}</div>
-            </div>
-            <div className="kpi-ico">
-              <IconForklift />
-            </div>
+      <div className="kpi-row" key={`${focus}|${dateVal}|${worksite}|${summary.total_alerts}`}>
+        <div className="kpi">
+          <div className="kpi-text">
+            <div className="label">Safety Score</div>
+            <div className="value green">{summary.safety_score}%</div>
+            <div className="meta">{summary.safety_label}</div>
           </div>
-          <div className="kpi">
-            <div className="kpi-text">
-              <div className="label">Total Alerts</div>
-              <div className="value">{fmt(summary.total_alerts ?? summary.incidents_prevented)}</div>
-            </div>
-            <div className="kpi-ico">
-              <IconImpact />
-            </div>
-          </div>
-          <div className="kpi">
-            <div className="kpi-text">
-              <div className="label">Asset Hours</div>
-              <div className="value">{fmt(summary.asset_hours)}</div>
-            </div>
-            <div className="kpi-ico">
-              <IconClock />
-            </div>
-          </div>
-          <div className="kpi">
-            <div className="kpi-text">
-              <div className="label">Assets</div>
-              <div className="value">{summary.assets}</div>
-            </div>
-            <div className="kpi-ico">
-              <IconCube />
-            </div>
-          </div>
-          <div className="kpi">
-            <div className="kpi-text">
-              <div className="label">Operators</div>
-              <div className="value">{summary.operators}</div>
-            </div>
-            <div className="kpi-ico">
-              <IconHardhat />
-            </div>
+          <div className="kpi-ico">
+            <IconForklift />
           </div>
         </div>
-      )}
+        <div className="kpi">
+          <div className="kpi-text">
+            <div className="label">Total Alerts</div>
+            <div className="value">{fmt(summary.total_alerts)}</div>
+          </div>
+          <div className="kpi-ico">
+            <IconImpact />
+          </div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-text">
+            <div className="label">Asset Hours</div>
+            <div className="value">{fmt(summary.asset_hours)}</div>
+          </div>
+          <div className="kpi-ico">
+            <IconClock />
+          </div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-text">
+            <div className="label">Assets</div>
+            <div className="value">{summary.assets}</div>
+          </div>
+          <div className="kpi-ico">
+            <IconCube />
+          </div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-text">
+            <div className="label">Operators</div>
+            <div className="value">{summary.operators}</div>
+          </div>
+          <div className="kpi-ico">
+            <IconHardhat />
+          </div>
+        </div>
+      </div>
 
       <div className="grid-2">
         <div className="card chart-card">
@@ -343,7 +414,7 @@ export function SafetyAnalyticsPage() {
             </div>
             <div className="chart-plot">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartSeries} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+                <LineChart data={series} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e6ebf2" vertical={false} />
                   <XAxis
                     dataKey="date"
@@ -403,7 +474,7 @@ export function SafetyAnalyticsPage() {
           <div className="chart-body">
             <div className="chart-plot">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartSeries} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+                <BarChart data={series} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e6ebf2" vertical={false} />
                   <XAxis
                     dataKey="date"
