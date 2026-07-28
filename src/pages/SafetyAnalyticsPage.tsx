@@ -31,6 +31,8 @@ type Focus =
   | 'high'
   | 'medium'
 
+type DownloadPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly'
+
 const FOCUS_OPTIONS: { value: Focus; label: string }[] = [
   { value: 'all', label: 'All alerts' },
   { value: 'forklift', label: 'Forklift alerts only' },
@@ -40,6 +42,27 @@ const FOCUS_OPTIONS: { value: Focus; label: string }[] = [
   { value: 'high', label: 'High severity only' },
   { value: 'medium', label: 'Medium severity only' },
 ]
+
+const DOWNLOAD_OPTIONS: { value: DownloadPeriod; label: string }[] = [
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
+]
+
+const PERIOD_HOURS: Record<DownloadPeriod, number> = {
+  daily: 24,
+  weekly: 24 * 7,
+  monthly: 24 * 30,
+  yearly: 24 * 365,
+}
+
+const PERIOD_DAYS: Record<DownloadPeriod, number> = {
+  daily: 1,
+  weekly: 7,
+  monthly: 30,
+  yearly: 365,
+}
 
 function fmt(n: number) {
   return new Intl.NumberFormat('en-US').format(n)
@@ -162,12 +185,11 @@ function buildSummary(
   }
 }
 
-function buildSeries(events: Violation[], days = 14): SeriesPoint[] {
-  const today = localISODate()
-  const todayDate = new Date(`${today}T12:00:00`)
+function buildSeries(events: Violation[], days = 14, endDay = localISODate()): SeriesPoint[] {
+  const endDate = new Date(`${endDay}T12:00:00`)
   const buckets = new Map<string, SeriesPoint>()
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(todayDate)
+    const d = new Date(endDate)
     d.setDate(d.getDate() - i)
     const key = localISODate(d)
     buckets.set(key, { date: key, alerts: 0, medium: 0, high: 0 })
@@ -184,11 +206,88 @@ function buildSeries(events: Violation[], days = 14): SeriesPoint[] {
   return [...buckets.values()]
 }
 
+function csvEscape(value: string) {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`
+  return value
+}
+
+function downloadBlob(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function analyticsToCsv(opts: {
+  period: DownloadPeriod
+  focus: Focus
+  worksite: string
+  endDay: string
+  summary: Summary
+  series: SeriesPoint[]
+  events: Violation[]
+}) {
+  const lines: string[] = []
+  const stamp = new Date().toISOString()
+
+  lines.push('Hypervis Safety Analytics Export')
+  lines.push(`Generated,${csvEscape(stamp)}`)
+  lines.push(`Period,${opts.period}`)
+  lines.push(`End date,${opts.endDay}`)
+  lines.push(`Worksite,${csvEscape(opts.worksite === 'all' ? 'All Worksites' : opts.worksite)}`)
+  lines.push(`Focus,${csvEscape(FOCUS_OPTIONS.find((o) => o.value === opts.focus)?.label || opts.focus)}`)
+  lines.push('')
+
+  lines.push('KPI Summary')
+  lines.push('Metric,Value')
+  lines.push(`Safety Score,${opts.summary.safety_score}%`)
+  lines.push(`Safety Label,${csvEscape(opts.summary.safety_label)}`)
+  lines.push(`Total Alerts,${opts.summary.total_alerts}`)
+  lines.push(`High Severity,${opts.summary.high_severity}`)
+  lines.push(`Medium Severity,${opts.summary.medium_severity}`)
+  lines.push(`Asset Hours,${opts.summary.asset_hours}`)
+  lines.push(`Assets,${opts.summary.assets}`)
+  lines.push(`Operators,${opts.summary.operators}`)
+  lines.push('')
+
+  lines.push('Daily Breakdown')
+  lines.push('Date,Total Alerts,Medium Severity,High Severity')
+  for (const row of opts.series) {
+    lines.push(`${row.date},${row.alerts},${row.medium},${row.high}`)
+  }
+  lines.push('')
+
+  lines.push('Alert Detail')
+  lines.push('id,timestamp,event,severity,profile,worksite,source')
+  for (const v of opts.events) {
+    lines.push(
+      [
+        String(v.id),
+        v.ts,
+        v.event_type,
+        v.severity,
+        v.profile,
+        v.worksite,
+        v.source || '',
+      ]
+        .map((c) => csvEscape(String(c ?? '')))
+        .join(','),
+    )
+  }
+
+  return lines.join('\n')
+}
+
 export function SafetyAnalyticsPage() {
   const [worksite, setWorksite] = useState('all')
   const [worksites, setWorksites] = useState<string[]>([])
   const [dateVal, setDateVal] = useState(() => localISODate())
   const [focus, setFocus] = useState<Focus>('all')
+  const [downloadPeriod, setDownloadPeriod] = useState<DownloadPeriod>('daily')
+  const [downloading, setDownloading] = useState(false)
   const [rawEvents, setRawEvents] = useState<Violation[]>([])
   const [videoCount, setVideoCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -260,6 +359,51 @@ export function SafetyAnalyticsPage() {
 
   const focusLabel = FOCUS_OPTIONS.find((o) => o.value === focus)?.label || focus
 
+  async function downloadAnalytics() {
+    setDownloading(true)
+    setError(null)
+    try {
+      const days = PERIOD_DAYS[downloadPeriod]
+      const endDay = dateVal
+      const startDate = new Date(`${endDay}T12:00:00`)
+      startDate.setDate(startDate.getDate() - (days - 1))
+      const startDay = localISODate(startDate)
+      // Fetch enough history to cover the selected Daily View end date.
+      const hoursBack = Math.max(
+        PERIOD_HOURS[downloadPeriod],
+        Math.ceil((Date.now() - startDate.getTime()) / 3_600_000) + 24,
+      )
+      const ws = worksite === 'all' ? undefined : worksite
+      const r = await api.violations(5000, ws, Math.min(hoursBack, 24 * 365))
+      const events = (Array.isArray(r.items) ? r.items : []).filter((e) => {
+        if (!matchesFocus(e, focus)) return false
+        const day = eventDay(e.ts)
+        return day >= startDay && day <= endDay
+      })
+      const periodSeries = buildSeries(events, days, endDay)
+      const periodSummary = buildSummary(events, videoCount, focus, endDay)
+      const stamp = new Date().toISOString().slice(0, 10)
+      const filename = `hypervis-analytics-${downloadPeriod}-${stamp}.csv`
+      downloadBlob(
+        filename,
+        analyticsToCsv({
+          period: downloadPeriod,
+          focus,
+          worksite,
+          endDay,
+          summary: periodSummary,
+          series: periodSeries,
+          events,
+        }),
+        'text/csv;charset=utf-8',
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Analytics download failed')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
     <>
       <div className="breadcrumb">
@@ -327,6 +471,28 @@ export function SafetyAnalyticsPage() {
               ))}
             </select>
           </div>
+          <div className="filter-field">
+            <label>Download period</label>
+            <select
+              value={downloadPeriod}
+              onChange={(e) => setDownloadPeriod(e.target.value as DownloadPeriod)}
+              aria-label="Analytics download period"
+            >
+              {DOWNLOAD_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={downloading}
+            onClick={() => void downloadAnalytics()}
+          >
+            {downloading ? 'Preparing…' : 'Download Analytics'}
+          </button>
         </div>
       </div>
 
@@ -334,6 +500,7 @@ export function SafetyAnalyticsPage() {
         <strong>Active:</strong> {focusLabel} · {formatDateLabel(dateVal)} ·{' '}
         <strong>{fmt(summary.total_alerts)}</strong> alerts in KPI cards
         {dayAlerts !== summary.total_alerts ? ` (${fmt(dayAlerts)} on chart for that day)` : ''}
+        {' · '}Download uses the same worksite + focus, ending on Daily View date.
       </p>
 
       {error && (

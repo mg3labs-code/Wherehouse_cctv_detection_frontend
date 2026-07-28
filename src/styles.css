@@ -351,6 +351,11 @@ button { cursor: pointer; }
   margin-bottom: 10px;
 }
 .filter-row.secondary { align-items: end; }
+.filter-row.secondary .btn-primary {
+  height: 38px;
+  padding: 0 16px;
+  white-space: nowrap;
+}
 .filter-field {
   display: flex;
   flex-direction: column;
